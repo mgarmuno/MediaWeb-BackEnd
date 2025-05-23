@@ -1,14 +1,15 @@
 package main
 
 import (
-	"fmt"
 	"net/http"
 
-	"mediaweb/mediaapi"
+	"github.com/mgarmuno/MediaWeb-BackEnd/api/anime"
+	"github.com/mgarmuno/MediaWeb-BackEnd/api/movie"
 )
 
 func main() {
-	fmt.Println("Serving ...")
-	http.Handle("/movieapi", &mediaapi.MediaAPI{})
-	http.ListenAndServe(":8080", nil)
+	http.HandleFunc("/api/movies/getAll", movie.GetAll)
+	http.HandleFunc("/api/anime/getAll", anime.GetAll)
+	http.HandleFunc("/api/anime/search", anime.SearchAnime)
+	http.ListenAndServe("localhost:8080", nil)
 }
