@@ -70,6 +70,7 @@ func SearchAnime(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("Cache-Control", "no-cache")
 	ctx := context.Background()
 
+	// TODO control errors to proper response
 	var respData Response
 	if err := client.Run(ctx, req, &respData); err != nil {
 		log.Fatal("Error callling anilist GraphQL API", err)
