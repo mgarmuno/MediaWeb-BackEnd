@@ -1,13 +1,11 @@
 package anime
 
 import (
-	"context"
+	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
+	"io"
 	"net/http"
-
-	"github.com/machinebox/graphql"
 )
 
 type Response struct {
@@ -42,7 +40,7 @@ type Title struct {
 
 const queryGraphql = `query {
 		Page {
-			media(search: "%s", type: ANIME) {
+			media(search: "%s", type: %s) {
 				id
 				title {
 					romaji
@@ -63,29 +61,85 @@ const queryGraphql = `query {
 	}`
 
 func SearchAnime(w http.ResponseWriter, r *http.Request) {
-	client := graphql.NewClient("https://graphql.anilist.co")
-	queryGraphqlReplaced := fmt.Sprintf(queryGraphql, "Naruto")
-
-	req := graphql.NewRequest(queryGraphqlReplaced)
-	req.Header.Set("Cache-Control", "no-cache")
-	ctx := context.Background()
-
-	// TODO control errors to proper response
-	var respData Response
-	if err := client.Run(ctx, req, &respData); err != nil {
-		log.Fatal("Error callling anilist GraphQL API", err)
+	EnableCors(&w)
+	query := r.URL.Query()
+	searchString, present := query["searchString"]
+	if !present || len(searchString) == 0 {
+		http.Error(w, "Query parameter 'searchString' is required in order to preform the anime serach", http.StatusBadRequest)
+		return
 	}
-
-	jsonResp, err := json.Marshal(respData)
+	err := callAnilistEndpoint(w, searchString[0], "ANIME")
 	if err != nil {
-		log.Fatalf("Error happened in JSON marshal. Err: %s", err)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(jsonResp)
 	w.WriteHeader(http.StatusOK)
 }
 
 func GetAll(rw http.ResponseWriter, rq *http.Request) {
 
 }
+
+// TODO extract to another class for reuse
+func EnableCors(w *http.ResponseWriter) {
+	(*w).Header().Set("Access-Control-Allow-Origin", "*")
+	(*w).Header().Set("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept")
+}
+
+// TODO probably better in a helper for anilist communications
+func callAnilistEndpoint(w http.ResponseWriter, search string, mediaType string) error {
+	queryGraphqlFormatted := fmt.Sprintf(queryGraphql, search, mediaType)
+	reqBody := map[string]interface{}{
+		"query": queryGraphqlFormatted,
+	}
+	jsonBody, _ := json.Marshal(reqBody)
+
+	req, err := http.NewRequest("POST", "https://graphql.anilist.co", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		http.Error(w, "Error calling anilist", http.StatusInternalServerError)
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, "Error calling anilist", http.StatusInternalServerError)
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, "Error calling anilist", http.StatusInternalServerError)
+		return err
+	}
+	w.Write(body)
+
+	return nil
+}
+
+// func callAnilistEndpoint(w http.ResponseWriter, search string, mediaType string) error {
+
+// 	var queryGraphqlReplaced string = fmt.Sprintf(queryGraphql, search, mediaType)
+// 	client := graphql.NewClient("https://graphql.anilist.co")
+// 	req := graphql.NewRequest(queryGraphqlReplaced)
+// 	req.Header.Set("Cache-Control", "no-cache")
+// 	ctx := context.Background()
+
+// 	var respData Response
+// 	if err := client.Run(ctx, req, &respData); err != nil {
+// 		http.Error(w, "Error calling anilist", http.StatusInternalServerError)
+// 		return err
+// 	}
+
+// 	jsonResp, err := json.Marshal(respData)
+// 	if err != nil {
+// 		http.Error(w, "Error serializing response from anilist", http.StatusInternalServerError)
+// 		return err
+// 	}
+// 	w.Write(jsonResp)
+
+// 	return nil
+// }
