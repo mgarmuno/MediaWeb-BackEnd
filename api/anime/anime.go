@@ -5,38 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+
+	data "github.com/mgarmuno/MediaWeb-BackEnd/data"
 )
-
-type Response struct {
-	Page Page `json:Page`
-}
-
-type Page struct {
-	Media []Media `json:media`
-}
-
-type Media struct {
-	ID           int        `json:id`
-	Title        Title      `json:title`
-	CoverImage   CoverImage `json:coverImage`
-	AverageScore int        `json:averageScore`
-	Popularity   int        `json:popularity`
-	Episode      int        `json:episodes`
-	Season       string     `json:season`
-	SeasonYear   int        `json:seasonYear`
-	IsAdult      bool       `json:isAdult`
-}
-
-type CoverImage struct {
-	Image string `json:large`
-}
-
-type Title struct {
-	Romaji  string `json:romaji`
-	English string `json:english`
-	Native  string `json:native`
-}
 
 const queryGraphql = `query {
 		Page {
@@ -60,7 +35,55 @@ const queryGraphql = `query {
 		}
 	}`
 
+type Response struct {
+	Data struct {
+		Page struct {
+			Media []struct {
+				ID    int `json:"id"`
+				Title struct {
+					Romaji  string `json:"romaji"`
+					English string `json:"english"`
+					Native  string `json:"native"`
+				} `json:"title"`
+				CoverImage struct {
+					Large string `json:"large"`
+				} `json:"coverImage"`
+				AverageScore int      `json:"averageScore"`
+				Popularity   int      `json:"popularity"`
+				Episodes     int      `json:"episodes"`
+				Season       string   `json:"season"`
+				SeasonYear   int      `json:"seasonYear"`
+				IsAdult      bool     `json:"isAdult"`
+				Format       string   `json:"format"`
+				Genres       []string `json:"genres"`
+			} `json:"media"`
+		} `json:"Page"`
+	} `json:"data"`
+}
+
+type AnimeApi struct {
+	ID            string `json:"id"`
+	AnilistId     int
+	Romaji        string `json:"romaji"`
+	English       string `json:"english"`
+	Native        string `json:"native"`
+	Image         string `json:"image"`
+	Episodes      int    `json:"episodes"`
+	AverageScore  int    `json:"averageScore"`
+	Progress      int
+	IsAdult       bool   `json:"isAdult"`
+	Season        string `json:"season"`
+	SeasonYear    int    `json:"seasonYear"`
+	PersonalScore int
+	Status        string
+	Genres        []string `json:"genres"`
+}
+
 func SearchAnime(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Wrong method", http.StatusBadRequest)
+		return
+	}
 	EnableCors(&w)
 	query := r.URL.Query()
 	searchString, present := query["searchString"]
@@ -77,8 +100,43 @@ func SearchAnime(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func GetAll(rw http.ResponseWriter, rq *http.Request) {
+func PostAnime(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Wrong method", http.StatusBadRequest)
+		return
+	}
 
+	var anime AnimeApi
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(&anime); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	animeData := prepareAnimeForData(anime)
+	newAnimeId, err := data.InsertAnime(animeData, anime.Genres)
+	if err != nil {
+		log.Println(err)
+		http.Error(w, "Error inserting new anime", http.StatusBadRequest)
+	}
+
+	animeData.Id = newAnimeId
+
+	downloadImage(&animeData)
+	data.UpdateImageUrl(animeData)
+}
+
+func GetAll(w http.ResponseWriter, r *http.Request) {
+	EnableCors(&w)
+	animeQueryResult := data.GetAllAnime()
+	animeResult := prepareAnimeResult(animeQueryResult)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	body, _ := json.Marshal(animeResult)
+
+	w.Write(body)
 }
 
 // TODO extract to another class for reuse
@@ -115,31 +173,103 @@ func callAnilistEndpoint(w http.ResponseWriter, search string, mediaType string)
 		http.Error(w, "Error calling anilist", http.StatusInternalServerError)
 		return err
 	}
-	w.Write(body)
+	var response Response
+	errUnmarshal := json.Unmarshal(body, &response)
+	if errUnmarshal != nil {
+		http.Error(w, "Error unmarshaling the response from anilist", http.StatusInternalServerError)
+		return err
+	}
+	animeToMarshal := prepareAnimeToMarshal(response)
+	animeBody, _ := json.Marshal(animeToMarshal)
+	w.Write(animeBody)
 
 	return nil
 }
 
-// func callAnilistEndpoint(w http.ResponseWriter, search string, mediaType string) error {
+func prepareAnimeToMarshal(response Response) []AnimeApi {
+	var animeList []AnimeApi
 
-// 	var queryGraphqlReplaced string = fmt.Sprintf(queryGraphql, search, mediaType)
-// 	client := graphql.NewClient("https://graphql.anilist.co")
-// 	req := graphql.NewRequest(queryGraphqlReplaced)
-// 	req.Header.Set("Cache-Control", "no-cache")
-// 	ctx := context.Background()
+	for _, animeFromResponse := range response.Data.Page.Media {
+		var anime AnimeApi
+		anime.AnilistId = animeFromResponse.ID
+		anime.Romaji = animeFromResponse.Title.Romaji
+		anime.English = animeFromResponse.Title.English
+		anime.Native = animeFromResponse.Title.Native
+		anime.Image = animeFromResponse.CoverImage.Large
+		anime.Episodes = animeFromResponse.Episodes
+		anime.IsAdult = animeFromResponse.IsAdult
+		anime.Season = animeFromResponse.Season
+		anime.SeasonYear = animeFromResponse.SeasonYear
+		anime.AverageScore = animeFromResponse.AverageScore
+		anime.Genres = animeFromResponse.Genres
+		animeList = append(animeList, anime)
+	}
 
-// 	var respData Response
-// 	if err := client.Run(ctx, req, &respData); err != nil {
-// 		http.Error(w, "Error calling anilist", http.StatusInternalServerError)
-// 		return err
-// 	}
+	return animeList
+}
 
-// 	jsonResp, err := json.Marshal(respData)
-// 	if err != nil {
-// 		http.Error(w, "Error serializing response from anilist", http.StatusInternalServerError)
-// 		return err
-// 	}
-// 	w.Write(jsonResp)
+func prepareAnimeResult(animeQueryResult data.AnimeQueryResult) AnimeApi {
+	var anime AnimeApi
+	anime.ID = animeQueryResult.Anime.Id
+	anime.AnilistId = animeQueryResult.Anime.AnillistId
+	anime.Romaji = animeQueryResult.Anime.Romaji
+	anime.English = animeQueryResult.Anime.English
+	anime.Native = animeQueryResult.Anime.Native
+	anime.Image = animeQueryResult.Anime.Image
+	anime.Episodes = animeQueryResult.Anime.Episodes
+	anime.AverageScore = animeQueryResult.Anime.AverageScore
+	anime.IsAdult = animeQueryResult.Anime.IsAdult
 
-// 	return nil
-// }
+	anime.Progress = animeQueryResult.Anime.Progress
+	anime.Status = animeQueryResult.Anime.Status
+	anime.PersonalScore = animeQueryResult.Anime.PersonalScore
+	for _, genre := range animeQueryResult.Genres {
+		anime.Genres = append(anime.Genres, genre.Genre)
+
+	}
+
+	return anime
+}
+
+func prepareAnimeForData(anime AnimeApi) data.Anime {
+	var animeData data.Anime
+	animeData.AnillistId = anime.AnilistId
+	animeData.Romaji = anime.Romaji
+	animeData.English = anime.English
+	animeData.Native = anime.Native
+	animeData.Image = anime.Image
+	animeData.Episodes = anime.Episodes
+	animeData.AverageScore = anime.AverageScore
+	animeData.Progress = anime.Progress
+	animeData.IsAdult = anime.IsAdult
+	animeData.PersonalScore = anime.PersonalScore
+	animeData.Status = anime.Status
+
+	return animeData
+}
+
+func downloadImage(animeData *data.Anime) {
+	url := animeData.Image
+
+	response, err := http.Get(url)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer response.Body.Close()
+
+	var imagePath string = "./img/" + animeData.Id + filepath.Ext(url)
+
+	file, err := os.Create(imagePath)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer file.Close()
+
+	_, err = io.Copy(file, response.Body)
+	if err != nil {
+		log.Println(err)
+	}
+	animeData.Image = imagePath
+}
