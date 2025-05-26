@@ -5,15 +5,13 @@ import (
 	"net/http"
 
 	"github.com/mgarmuno/MediaWeb-BackEnd/api/anime"
-	"github.com/mgarmuno/MediaWeb-BackEnd/api/movie"
-	"github.com/mgarmuno/MediaWeb-BackEnd/data"
+	"github.com/mgarmuno/MediaWeb-BackEnd/database"
 )
 
 func main() {
-	data.InitializeDatabase()
+	database.InitializeDatabase()
 
 	http.Handle("/img/", http.StripPrefix("/img/", http.FileServer(http.Dir("img"))))
-	http.HandleFunc("/api/movies/getAll", movie.GetAll)
 	http.HandleFunc("/api/anime/getAll", anime.GetAll)
 	http.HandleFunc("/api/anime/search", anime.SearchAnime)
 	fmt.Println("Serving API...")
